@@ -1,0 +1,1 @@
+ALTER TABLE "person_profiles" ADD COLUMN "geo_tagging_enabled" boolean DEFAULT false NOT NULL;

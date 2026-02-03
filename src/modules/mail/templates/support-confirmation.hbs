@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Support Request Received</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }
+    .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
+    .header { background-color: #1a365d; padding: 30px; text-align: center; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 28px; }
+    .content { padding: 40px 30px; }
+    .content h2 { color: #1a365d; margin-top: 0; }
+    .content p { color: #4a5568; line-height: 1.6; }
+    .details { background-color: #f7fafc; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    .details table { width: 100%; border-collapse: collapse; }
+    .details td { padding: 8px 0; color: #4a5568; }
+    .details td:first-child { font-weight: 600; color: #1a365d; width: 120px; }
+    .footer { background-color: #edf2f7; padding: 20px; text-align: center; font-size: 12px; color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{{appName}}</h1>
+    </div>
+    <div class="content">
+      <h2>Support Request Received</h2>
+      <p>Hi {{firstName}},</p>
+      <p>We have received your support request and our team will review it shortly. Here are the details:</p>
+
+      <div class="details">
+        <table>
+          <tr>
+            <td>Ticket ID</td>
+            <td>{{ticketId}}</td>
+          </tr>
+          <tr>
+            <td>Subject</td>
+            <td>{{subject}}</td>
+          </tr>
+          <tr>
+            <td>Category</td>
+            <td>{{category}}</td>
+          </tr>
+        </table>
+      </div>
+
+      <p>We aim to respond to all support requests as soon as possible. You can check the status of your request at any time from the Help & Support section in your account.</p>
+
+      <p>Thank you for your patience.</p>
+
+      <p>Best regards,<br>The {{appName}} Team</p>
+    </div>
+    <div class="footer">
+      <p>&copy; {{year}} {{appName}}. All rights reserved.</p>
+      <p>This email was sent because you submitted a support request.</p>
+    </div>
+  </div>
+</body>
+</html>

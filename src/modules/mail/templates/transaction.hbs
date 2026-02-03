@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transaction Notification</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }
+    .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
+    .header { background-color: #1a365d; padding: 30px; text-align: center; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 28px; }
+    .content { padding: 40px 30px; }
+    .content h2 { color: #1a365d; margin-top: 0; }
+    .content p { color: #4a5568; line-height: 1.6; }
+    .transaction-box { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; margin: 20px 0; }
+    .transaction-header { padding: 20px; text-align: center; }
+    .transaction-header.credit { background-color: #c6f6d5; }
+    .transaction-header.debit { background-color: #fed7d7; }
+    .transaction-header .type { font-size: 14px; text-transform: uppercase; margin: 0; }
+    .transaction-header.credit .type { color: #276749; }
+    .transaction-header.debit .type { color: #c53030; }
+    .transaction-header .amount { font-size: 32px; font-weight: bold; margin: 10px 0 0 0; }
+    .transaction-header.credit .amount { color: #22543d; }
+    .transaction-header.debit .amount { color: #9b2c2c; }
+    .transaction-details { padding: 20px; background-color: #f7fafc; }
+    .detail-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e2e8f0; }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-label { color: #718096; font-size: 14px; }
+    .detail-value { color: #2d3748; font-weight: 500; }
+    .balance-box { background-color: #ebf8ff; padding: 15px; border-radius: 6px; margin: 20px 0; text-align: center; }
+    .balance-label { color: #2b6cb0; font-size: 14px; margin: 0; }
+    .balance-value { color: #1a365d; font-size: 24px; font-weight: bold; margin: 5px 0 0 0; }
+    .footer { background-color: #edf2f7; padding: 20px; text-align: center; font-size: 12px; color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{{appName}}</h1>
+    </div>
+    <div class="content">
+      <h2>Transaction Alert</h2>
+      <p>Hi {{firstName}},</p>
+      <p>A transaction has been made on your account:</p>
+
+      <div class="transaction-box">
+        <div class="transaction-header {{type}}">
+          <p class="type">{{typeLabel}}</p>
+          <p class="amount">{{currency}} {{amount}}</p>
+        </div>
+        <div class="transaction-details">
+          <div class="detail-row">
+            <span class="detail-label">Description</span>
+            <span class="detail-value">{{description}}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Reference</span>
+            <span class="detail-value">{{reference}}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Date & Time</span>
+            <span class="detail-value">{{date}}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="balance-box">
+        <p class="balance-label">Available Balance</p>
+        <p class="balance-value">{{currency}} {{balance}}</p>
+      </div>
+
+      <p>If you did not authorize this transaction, please contact our support team immediately.</p>
+
+      <p>Best regards,<br>The {{appName}} Team</p>
+    </div>
+    <div class="footer">
+      <p>&copy; {{year}} {{appName}}. All rights reserved.</p>
+      <p>This is an automated transaction notification.</p>
+    </div>
+  </div>
+</body>
+</html>

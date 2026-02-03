@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KYC Status Update</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }
+    .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
+    .header { background-color: #1a365d; padding: 30px; text-align: center; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 28px; }
+    .content { padding: 40px 30px; }
+    .content h2 { color: #1a365d; margin-top: 0; }
+    .content p { color: #4a5568; line-height: 1.6; }
+    .status-box { border-radius: 8px; padding: 25px; margin: 20px 0; text-align: center; }
+    .status-box.verified { background-color: #c6f6d5; border: 1px solid #68d391; }
+    .status-box.rejected { background-color: #fed7d7; border: 1px solid #fc8181; }
+    .status-box.pending { background-color: #fefcbf; border: 1px solid #f6e05e; }
+    .status-icon { font-size: 48px; margin-bottom: 10px; }
+    .status-title { font-size: 20px; font-weight: bold; margin: 0; }
+    .status-box.verified .status-title { color: #276749; }
+    .status-box.rejected .status-title { color: #c53030; }
+    .status-box.pending .status-title { color: #975a16; }
+    .document-info { background-color: #f7fafc; border-radius: 8px; padding: 20px; margin: 20px 0; }
+    .document-info p { margin: 5px 0; }
+    .rejection-reason { background-color: #fff5f5; border-left: 4px solid #e53e3e; padding: 15px; margin: 20px 0; }
+    .rejection-reason p { margin: 0; color: #742a2a; }
+    .button { display: inline-block; background-color: #2b6cb0; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+    .footer { background-color: #edf2f7; padding: 20px; text-align: center; font-size: 12px; color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{{appName}}</h1>
+    </div>
+    <div class="content">
+      <h2>Document Verification Update</h2>
+      <p>Hi {{firstName}},</p>
+
+      {{#ifCond status "==" "verified"}}
+      <div class="status-box verified">
+        <div class="status-icon">✓</div>
+        <p class="status-title">Document Verified Successfully</p>
+      </div>
+      <p>Great news! Your <strong>{{documentType}}</strong> has been verified successfully. Your account now has access to additional features.</p>
+      {{/ifCond}}
+
+      {{#ifCond status "==" "rejected"}}
+      <div class="status-box rejected">
+        <div class="status-icon">✗</div>
+        <p class="status-title">Document Verification Failed</p>
+      </div>
+      <p>Unfortunately, your <strong>{{documentType}}</strong> could not be verified.</p>
+
+      {{#if rejectionReason}}
+      <div class="rejection-reason">
+        <p><strong>Reason:</strong> {{rejectionReason}}</p>
+      </div>
+      {{/if}}
+
+      <p>Please upload a new document that meets our requirements.</p>
+      <p style="text-align: center;">
+        <a href="#" class="button">Upload New Document</a>
+      </p>
+      {{/ifCond}}
+
+      {{#ifCond status "==" "pending"}}
+      <div class="status-box pending">
+        <div class="status-icon">⏳</div>
+        <p class="status-title">Document Under Review</p>
+      </div>
+      <p>Your <strong>{{documentType}}</strong> has been received and is currently being reviewed by our team. This usually takes 1-2 business days.</p>
+      <p>We'll notify you once the review is complete.</p>
+      {{/ifCond}}
+
+      <div class="document-info">
+        <p><strong>Document Type:</strong> {{documentType}}</p>
+        <p><strong>Status:</strong> {{status}}</p>
+      </div>
+
+      <p>If you have any questions, please contact our support team.</p>
+
+      <p>Best regards,<br>The {{appName}} Team</p>
+    </div>
+    <div class="footer">
+      <p>&copy; {{year}} {{appName}}. All rights reserved.</p>
+      <p>This is an automated KYC status notification.</p>
+    </div>
+  </div>
+</body>
+</html>
