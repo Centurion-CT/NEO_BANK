@@ -637,6 +637,14 @@ export class IdentityService {
       reviewedBy: string;
       reviewNotes: string;
       rejectionReason: string;
+      rejectionCount: string;
+      verificationStartedAt: Date;
+      verificationCompletedAt: Date;
+      lastReviewedAt: Date;
+      nextReviewDue: Date;
+      expiresAt: Date;
+      riskScore: string;
+      riskFactors: string;
     }>,
   ): Promise<KycProfile> {
     return this.identityRepository.updateKycProfile(identityId, data);

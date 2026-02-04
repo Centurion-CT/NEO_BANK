@@ -3,12 +3,47 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
   Logger,
 } from '@nestjs/common';
 import { KycRepository } from './kyc.repository';
 import { IdentityService } from '@modules/identity/identity.service';
 import { QoreidService, VerificationParams } from '@modules/qoreid/qoreid.service';
-import { KycDocument } from '@database/schemas';
+import { KycDocument, KycProfile } from '@database/schemas';
+
+/**
+ * KYC Profile Status types
+ */
+export type KycProfileStatus =
+  | 'not_started'
+  | 'in_progress'
+  | 'pending_review'
+  | 'approved'
+  | 'rejected'
+  | 'expired'
+  | 'suspended';
+
+/**
+ * Valid KYC status transitions
+ *
+ * State Machine:
+ * NOT_STARTED → IN_PROGRESS (start)
+ * IN_PROGRESS → PENDING_REVIEW (submit)
+ * PENDING_REVIEW → IN_PROGRESS (request_update - back to editing)
+ * PENDING_REVIEW → APPROVED (approve)
+ * PENDING_REVIEW → REJECTED (reject)
+ * REJECTED → IN_PROGRESS (resubmit)
+ * EXPIRED → IN_PROGRESS (renew)
+ */
+const KYC_STATUS_TRANSITIONS: Record<KycProfileStatus, KycProfileStatus[]> = {
+  'not_started': ['in_progress'],
+  'in_progress': ['pending_review'],
+  'pending_review': ['in_progress', 'approved', 'rejected'],
+  'approved': ['expired', 'suspended'],
+  'rejected': ['in_progress'], // Can retry submission
+  'expired': ['in_progress'], // Can renew KYC
+  'suspended': ['in_progress', 'approved'], // Admin can reinstate
+};
 
 export interface UploadDocumentDto {
   documentType: string;
@@ -68,6 +103,268 @@ export class KycService {
     private readonly identityService: IdentityService,
     private readonly qoreidService: QoreidService,
   ) {}
+
+  // ============================================================================
+  // KYC State Machine
+  // ============================================================================
+
+  /**
+   * Check if a status transition is valid
+   */
+  isValidTransition(
+    currentStatus: KycProfileStatus,
+    targetStatus: KycProfileStatus,
+  ): boolean {
+    const validTargets = KYC_STATUS_TRANSITIONS[currentStatus] || [];
+    return validTargets.includes(targetStatus);
+  }
+
+  /**
+   * Transition KYC profile status with validation
+   * @throws ConflictException if transition is invalid
+   */
+  async transitionKycStatus(
+    identityId: string,
+    targetStatus: KycProfileStatus,
+    reviewerId?: string,
+    reviewNotes?: string,
+  ): Promise<KycProfile> {
+    const kycProfile = await this.identityService.getKycProfile(identityId);
+
+    if (!kycProfile) {
+      throw new NotFoundException({
+        code: 'KYC_PROFILE_NOT_FOUND',
+        message: 'KYC profile not found for this identity',
+      });
+    }
+
+    const currentStatus = kycProfile.status as KycProfileStatus;
+
+    if (!this.isValidTransition(currentStatus, targetStatus)) {
+      throw new ConflictException({
+        code: 'INVALID_STATUS_TRANSITION',
+        message: `Cannot transition from ${currentStatus} to ${targetStatus}`,
+        currentStatus,
+        targetStatus,
+        validTransitions: KYC_STATUS_TRANSITIONS[currentStatus] || [],
+      });
+    }
+
+    // Build update data with explicit types to match service signature
+    const updateData: {
+      status?: KycProfileStatus;
+      verificationStartedAt?: Date;
+      lastReviewedAt?: Date;
+      verificationCompletedAt?: Date;
+      reviewedBy?: string;
+      reviewNotes?: string;
+      rejectionCount?: string;
+    } = {
+      status: targetStatus,
+    };
+
+    // Add timestamps based on transition
+    if (targetStatus === 'in_progress' && currentStatus === 'not_started') {
+      updateData.verificationStartedAt = new Date();
+    }
+
+    if (targetStatus === 'pending_review') {
+      // Profile submitted for review - timestamp captured via updatedAt
+    }
+
+    if (targetStatus === 'approved' || targetStatus === 'rejected') {
+      updateData.lastReviewedAt = new Date();
+      updateData.verificationCompletedAt = new Date();
+      if (reviewerId) {
+        updateData.reviewedBy = reviewerId;
+      }
+      if (reviewNotes) {
+        updateData.reviewNotes = reviewNotes;
+      }
+    }
+
+    if (targetStatus === 'rejected') {
+      // Increment rejection count
+      const currentCount = parseInt(kycProfile.rejectionCount || '0', 10);
+      updateData.rejectionCount = String(currentCount + 1);
+    }
+
+    return this.identityService.updateKycProfile(identityId, updateData);
+  }
+
+  /**
+   * Start KYC process for an identity
+   * Transition: NOT_STARTED → IN_PROGRESS
+   */
+  async startKyc(identityId: string): Promise<KycProfile> {
+    this.logger.log(`Starting KYC for identity ${identityId}`);
+    return this.transitionKycStatus(identityId, 'in_progress');
+  }
+
+  /**
+   * Submit personal KYC for review
+   * Transition: IN_PROGRESS → PENDING_REVIEW
+   *
+   * Validates:
+   * - Required documents are uploaded
+   * - Profile is in editable state
+   */
+  async submitPersonalKyc(identityId: string): Promise<KycProfile> {
+    this.logger.log(`Submitting personal KYC for identity ${identityId}`);
+
+    // Validate required documents are present
+    const documents = await this.kycRepository.findByIdentityId(identityId);
+    const requiredTypes = ['government_id']; // At minimum, need govt ID
+
+    const uploadedTypes = new Set(documents.map((d) => d.documentType));
+    const missingDocs = requiredTypes.filter((t) => !uploadedTypes.has(t));
+
+    if (missingDocs.length > 0) {
+      throw new BadRequestException({
+        code: 'MISSING_REQUIRED_DOCUMENTS',
+        message: 'Required documents not uploaded',
+        missingDocuments: missingDocs,
+      });
+    }
+
+    // Check for any pending or rejected docs that should block submission
+    const pendingOrRejected = documents.filter(
+      (d) => d.status === 'pending' || d.status === 'rejected',
+    );
+
+    if (pendingOrRejected.some((d) => d.status === 'rejected')) {
+      throw new BadRequestException({
+        code: 'REJECTED_DOCUMENTS_EXIST',
+        message: 'Please re-upload rejected documents before submitting',
+      });
+    }
+
+    return this.transitionKycStatus(identityId, 'pending_review');
+  }
+
+  /**
+   * Submit business KYC for review
+   * Transition: IN_PROGRESS → PENDING_REVIEW
+   *
+   * Validates:
+   * - Board resolution document present
+   * - CAC certificate present
+   * - At least one business relationship exists
+   */
+  async submitBusinessKyc(
+    identityId: string,
+    tenantId: string,
+  ): Promise<{ kycProfile: KycProfile; message: string }> {
+    this.logger.log(`Submitting business KYC for tenant ${tenantId}`);
+
+    // Get the full identity with business profile
+    const fullIdentity = await this.identityService.getFullIdentity(identityId);
+
+    if (!fullIdentity || fullIdentity.identity.identityType !== 'legal_entity') {
+      throw new BadRequestException({
+        code: 'NOT_BUSINESS_IDENTITY',
+        message: 'This identity is not a business account',
+      });
+    }
+
+    // Validate required documents
+    const documents = await this.kycRepository.findByIdentityId(identityId);
+    const requiredTypes = ['cac_certificate', 'board_resolution'];
+
+    const uploadedTypes = new Set(documents.map((d) => d.documentType));
+    const missingDocs = requiredTypes.filter((t) => !uploadedTypes.has(t));
+
+    if (missingDocs.length > 0) {
+      throw new BadRequestException({
+        code: 'MISSING_REQUIRED_DOCUMENTS',
+        message: 'Required business documents not uploaded',
+        missingDocuments: missingDocs,
+      });
+    }
+
+    // Validate at least one business relationship exists
+    const relationshipsCount =
+      await this.identityService.countBusinessRelationships(identityId);
+
+    if (relationshipsCount === 0) {
+      throw new BadRequestException({
+        code: 'NO_BUSINESS_RELATIONSHIPS',
+        message:
+          'At least one business relationship (owner/director) must be added before submission',
+      });
+    }
+
+    // Transition KYC profile status
+    const kycProfile = await this.transitionKycStatus(
+      identityId,
+      'pending_review',
+    );
+
+    return {
+      kycProfile,
+      message: 'Business KYC submitted successfully. It will be reviewed by our compliance team.',
+    };
+  }
+
+  /**
+   * Admin action: Request updates from user
+   * Transition: PENDING_REVIEW → IN_PROGRESS
+   */
+  async requestKycUpdate(
+    identityId: string,
+    reviewerId: string,
+    reason: string,
+  ): Promise<KycProfile> {
+    this.logger.log(`Requesting KYC update for identity ${identityId}`);
+    return this.transitionKycStatus(
+      identityId,
+      'in_progress',
+      reviewerId,
+      `Update requested: ${reason}`,
+    );
+  }
+
+  /**
+   * Admin action: Reject KYC
+   * Transition: PENDING_REVIEW → REJECTED
+   */
+  async rejectKyc(
+    identityId: string,
+    reviewerId: string,
+    reason: string,
+  ): Promise<KycProfile> {
+    this.logger.log(`Rejecting KYC for identity ${identityId}`);
+
+    const kycProfile = await this.transitionKycStatus(
+      identityId,
+      'rejected',
+      reviewerId,
+      reason,
+    );
+
+    // Update rejection reason separately
+    return this.identityService.updateKycProfile(identityId, {
+      rejectionReason: reason,
+    });
+  }
+
+  /**
+   * Admin action: Approve KYC
+   * Transition: PENDING_REVIEW → APPROVED
+   */
+  async approveKyc(
+    identityId: string,
+    reviewerId: string,
+    notes?: string,
+  ): Promise<KycProfile> {
+    this.logger.log(`Approving KYC for identity ${identityId}`);
+    return this.transitionKycStatus(
+      identityId,
+      'approved',
+      reviewerId,
+      notes || 'KYC approved',
+    );
+  }
 
   // ============================================================================
   // Digital Identity Verification (via Qoreid)
@@ -398,6 +695,7 @@ export class KycService {
 
   /**
    * Get KYC status summary for an identity
+   * Includes profile status for state machine tracking (GAP-009)
    */
   async getKycStatus(identityId: string): Promise<{
     currentTier: string;
@@ -407,6 +705,8 @@ export class KycService {
     documentsRejected: number;
     tierProgress: Record<string, boolean>;
     nextTierRequirements: string[];
+    profileStatus: KycProfileStatus;
+    rejectionReason?: string;
   }> {
     const kycProfile = await this.identityService.getKycProfile(identityId);
     const documents = await this.kycRepository.findByIdentityId(identityId);
@@ -437,6 +737,9 @@ export class KycService {
       }
     }
 
+    // Profile status from state machine
+    const profileStatus = (kycProfile?.status as KycProfileStatus) || 'not_started';
+
     return {
       currentTier,
       documentsSubmitted: documents.length,
@@ -445,6 +748,8 @@ export class KycService {
       documentsRejected: documents.filter((d) => d.status === 'rejected').length,
       tierProgress,
       nextTierRequirements,
+      profileStatus,
+      rejectionReason: kycProfile?.rejectionReason || undefined,
     };
   }
 

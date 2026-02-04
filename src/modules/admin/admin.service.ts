@@ -210,6 +210,178 @@ export class AdminService {
     return this.kycService.reviewDocument(docId, status, reviewNotes, adminId);
   }
 
+  // ============================================================================
+  // KYC Profile Review Actions (GAP-008)
+  // ============================================================================
+
+  /**
+   * Get KYC profiles pending review with enhanced data
+   */
+  async getKycProfileReviewQueue(limit = 20, offset = 0) {
+    // Get identities with KYC profiles in pending_review status
+    const identities = await this.identityService.findAll(limit * 2, offset);
+
+    const profilesInReview = [];
+    for (const identity of identities) {
+      const fullIdentity = await this.identityService.getFullIdentity(identity.id);
+      if (fullIdentity?.kycProfile?.status === 'pending_review') {
+        const emailPrincipal = fullIdentity.principals.find(p => p.principalType === 'email');
+        const documents = await this.kycService.getDocuments(identity.id);
+
+        profilesInReview.push({
+          identityId: identity.id,
+          kycProfileId: fullIdentity.kycProfile.id,
+          identityType: identity.identityType,
+          email: emailPrincipal?.principalValue,
+          name: fullIdentity.personProfile
+            ? `${fullIdentity.personProfile.firstName} ${fullIdentity.personProfile.lastName}`
+            : fullIdentity.businessProfile?.legalName || 'Unknown',
+          tier: fullIdentity.kycProfile.kycTier,
+          status: fullIdentity.kycProfile.status,
+          submittedAt: fullIdentity.kycProfile.updatedAt,
+          documentsCount: documents.length,
+          verifiedDocuments: documents.filter(d => d.status === 'verified').length,
+          pendingDocuments: documents.filter(d => d.status === 'pending').length,
+        });
+
+        if (profilesInReview.length >= limit) break;
+      }
+    }
+
+    return {
+      data: profilesInReview,
+      total: profilesInReview.length,
+    };
+  }
+
+  /**
+   * Request update from user (send KYC back for corrections)
+   * Transition: PENDING_REVIEW → IN_PROGRESS
+   */
+  async requestKycProfileUpdate(
+    identityId: string,
+    adminId: string,
+    reason: string,
+  ) {
+    this.logger.log(`Admin ${adminId} requesting KYC update for identity ${identityId}`);
+    const kycProfile = await this.kycService.requestKycUpdate(identityId, adminId, reason);
+    return {
+      identityId,
+      status: kycProfile.status,
+      message: 'KYC sent back to user for updates',
+      reason,
+    };
+  }
+
+  /**
+   * Reject KYC profile
+   * Transition: PENDING_REVIEW → REJECTED
+   */
+  async rejectKycProfile(
+    identityId: string,
+    adminId: string,
+    reason: string,
+  ) {
+    this.logger.log(`Admin ${adminId} rejecting KYC for identity ${identityId}`);
+    const kycProfile = await this.kycService.rejectKyc(identityId, adminId, reason);
+    return {
+      identityId,
+      status: kycProfile.status,
+      message: 'KYC rejected',
+      reason,
+    };
+  }
+
+  /**
+   * Approve KYC profile
+   * Transition: PENDING_REVIEW → APPROVED
+   * Also handles auto role assignment for business accounts
+   */
+  async approveKycProfile(
+    identityId: string,
+    adminId: string,
+    notes?: string,
+  ) {
+    this.logger.log(`Admin ${adminId} approving KYC for identity ${identityId}`);
+
+    // Approve the KYC profile
+    const kycProfile = await this.kycService.approveKyc(identityId, adminId, notes);
+
+    // Get full identity to check if business account
+    const fullIdentity = await this.identityService.getFullIdentity(identityId);
+
+    // Auto-assign roles for business accounts (GAP-006)
+    if (fullIdentity?.identity.identityType === 'legal_entity') {
+      await this.assignBusinessRolesAfterApproval(identityId, adminId);
+    }
+
+    // Update identity status to active if needed
+    if (fullIdentity?.identity.status === 'pending_verification') {
+      await this.identityService.updateStatus(identityId, 'active', adminId, 'KYC approved');
+    }
+
+    return {
+      identityId,
+      status: kycProfile.status,
+      message: 'KYC approved successfully',
+      notes,
+    };
+  }
+
+  /**
+   * Auto-assign business roles after KYC approval (GAP-006)
+   * Rule: Based on BusinessRelationship role:
+   * - owner/director → BUSINESS_OWNER
+   * - signatory/staff → BUSINESS_STAFF
+   *
+   * Note: Full TENANT scope support will be added when permissions service
+   * is enhanced to use identityRoles table with scope parameters.
+   */
+  private async assignBusinessRolesAfterApproval(
+    businessIdentityId: string,
+    adminId: string,
+  ) {
+    this.logger.log(`Assigning business roles for identity ${businessIdentityId}`);
+
+    const relationships = await this.identityService.getBusinessRelationships(businessIdentityId);
+
+    for (const rel of relationships) {
+      const role = rel.role;
+      let roleType: string;
+
+      if (role === 'owner' || role === 'director') {
+        roleType = 'business_owner';
+      } else if (role === 'signatory') {
+        roleType = 'business_staff';
+      } else {
+        // Skip 'admin' and 'operator' roles - they don't map to RBAC roles automatically
+        continue;
+      }
+
+      // Find the role and assign it
+      const targetRole = await this.permissionsService.findRoleByType(roleType);
+      if (targetRole) {
+        try {
+          // Assign role to the person identity (user associated with the business)
+          // TODO: Enhance to use scoped identity_roles table for TENANT scope
+          await this.permissionsService.assignRoleToIdentity(
+            rel.personIdentityId,
+            targetRole.id,
+            adminId,
+          );
+          this.logger.log(
+            `Assigned ${roleType} role to identity ${rel.personIdentityId} for business ${businessIdentityId}`,
+          );
+        } catch (error) {
+          // Role may already be assigned, log and continue
+          this.logger.warn(
+            `Could not assign ${roleType} role to ${rel.personIdentityId}: ${error.message}`,
+          );
+        }
+      }
+    }
+  }
+
   /**
    * List support requests
    */

@@ -22,10 +22,19 @@ export const tenantTypeEnum = pgEnum('tenant_type', [
 /**
  * Tenant Status Enum
  * Represents the lifecycle state of a tenant
+ *
+ * Onboarding flow: DRAFT → SUBMITTED → UNDER_REVIEW → APPROVED → ACTIVE
+ * Branches: UNDER_REVIEW → REQUEST_UPDATE → DRAFT (back to editing)
+ *           UNDER_REVIEW → REJECTED (terminal)
  */
 export const tenantStatusEnum = pgEnum('tenant_status', [
-  'ACTIVE',     // Tenant is operational
-  'SUSPENDED',  // Tenant is temporarily disabled
+  'DRAFT',        // Initial state - business details being prepared
+  'SUBMITTED',    // KYC submitted for review
+  'UNDER_REVIEW', // Compliance team reviewing
+  'APPROVED',     // KYC approved, pending activation
+  'REJECTED',     // KYC rejected (can resubmit)
+  'ACTIVE',       // Tenant is fully operational
+  'SUSPENDED',    // Tenant is temporarily disabled
 ]);
 
 /**
@@ -56,8 +65,8 @@ export const tenants = pgTable(
       onDelete: 'set null',
     }),
 
-    // Lifecycle status
-    status: tenantStatusEnum('status').notNull().default('ACTIVE'),
+    // Lifecycle status (starts in DRAFT for onboarding workflow)
+    status: tenantStatusEnum('status').notNull().default('DRAFT'),
 
     // Timestamps
     createdAt: timestamp('created_at').notNull().defaultNow(),

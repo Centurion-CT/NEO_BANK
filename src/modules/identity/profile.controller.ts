@@ -20,6 +20,7 @@ import {
 } from '@nestjs/swagger';
 
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
+import { KycProfileLockGuard } from '@common/guards/kyc-profile-lock.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { IdentityService } from './identity.service';
 import { PermissionsService } from '@modules/permissions/permissions.service';
@@ -146,13 +147,16 @@ export class ProfileController {
 
   /**
    * Update current user profile
+   * Locked when KYC status is 'pending_review' (GAP-007)
    */
   @Patch('me')
+  @UseGuards(KycProfileLockGuard)
   @ApiOperation({
     summary: 'Update current user profile',
-    description: 'Update profile information (name, address, preferences)',
+    description: 'Update profile information (name, address, preferences). Blocked during KYC review.',
   })
   @ApiResponse({ status: 200, description: 'Profile updated successfully' })
+  @ApiResponse({ status: 403, description: 'Profile locked during KYC review' })
   async updateProfile(
     @CurrentUser('id') identityId: string,
     @Body() updateData: {
@@ -374,8 +378,10 @@ export class ProfileController {
 
   /**
    * Upload profile picture
+   * Locked when KYC status is 'pending_review' (GAP-007)
    */
   @Post('me/avatar')
+  @UseGuards(KycProfileLockGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 5 * 1024 * 1024 }, // 5MB

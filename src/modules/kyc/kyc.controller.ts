@@ -345,4 +345,118 @@ export class KycController {
       message: `Successfully upgraded to ${upgradeDto.targetTier}`,
     };
   }
+
+  // ============================================================================
+  // KYC Submission Endpoints (GAP-002, GAP-003)
+  // ============================================================================
+
+  /**
+   * Start KYC process for current user
+   * Transition: NOT_STARTED → IN_PROGRESS
+   */
+  @Post('profile/start')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Start KYC process',
+    description: 'Initialize KYC verification for the current user',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'KYC process started',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Invalid status transition',
+  })
+  async startKyc(@CurrentUser('id') identityId: string) {
+    const kycProfile = await this.kycService.startKyc(identityId);
+    return {
+      success: true,
+      status: kycProfile.status,
+      message: 'KYC process started. Please upload required documents.',
+    };
+  }
+
+  /**
+   * Submit personal KYC for review
+   * Transition: IN_PROGRESS → PENDING_REVIEW
+   */
+  @Post('profile/IDENTITY/:identityId/submit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Submit personal KYC',
+    description: 'Submit personal KYC for compliance review',
+  })
+  @ApiParam({ name: 'identityId', description: 'Identity ID (must match current user)' })
+  @ApiResponse({
+    status: 200,
+    description: 'KYC submitted successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Missing required documents',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Invalid status transition',
+  })
+  async submitPersonalKyc(
+    @CurrentUser('id') currentUserId: string,
+    @Param('identityId') identityId: string,
+  ) {
+    // Ensure user can only submit their own KYC
+    if (currentUserId !== identityId) {
+      throw new BadRequestException({
+        code: 'UNAUTHORIZED_IDENTITY',
+        message: 'You can only submit your own KYC',
+      });
+    }
+
+    const kycProfile = await this.kycService.submitPersonalKyc(identityId);
+    return {
+      success: true,
+      status: kycProfile.status,
+      message: 'Personal KYC submitted successfully. Our compliance team will review your documents.',
+    };
+  }
+
+  /**
+   * Submit business KYC for review
+   * Transition: IN_PROGRESS → PENDING_REVIEW
+   */
+  @Post('profile/TENANT/:tenantId/submit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Submit business KYC',
+    description: 'Submit business KYC for compliance review. Validates board resolution and business relationships.',
+  })
+  @ApiParam({ name: 'tenantId', description: 'Tenant ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Business KYC submitted successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Missing required documents or relationships',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Invalid status transition',
+  })
+  async submitBusinessKyc(
+    @CurrentUser('id') currentUserId: string,
+    @Param('tenantId') tenantId: string,
+  ) {
+    // TODO: Validate user has permission to submit for this tenant
+    // For now, we pass the current user's identity ID
+    const result = await this.kycService.submitBusinessKyc(
+      currentUserId,
+      tenantId,
+    );
+    return {
+      success: true,
+      status: result.kycProfile.status,
+      message: result.message,
+    };
+  }
 }

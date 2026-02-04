@@ -95,6 +95,76 @@ export class AdminController {
     );
   }
 
+  // ============================================================================
+  // KYC Profile Review Actions (GAP-008)
+  // ============================================================================
+
+  /**
+   * Get KYC profiles pending review
+   */
+  @Get('kyc/profiles/pending')
+  async getKycProfileReviewQueue(
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.adminService.getKycProfileReviewQueue(
+      limit ? parseInt(limit, 10) : 20,
+      offset ? parseInt(offset, 10) : 0,
+    );
+  }
+
+  /**
+   * Request update from user - sends KYC back for corrections
+   * Transition: PENDING_REVIEW → IN_PROGRESS
+   */
+  @Post('kyc/review/:identityId/request-update')
+  async requestKycUpdate(
+    @Param('identityId') identityId: string,
+    @Body('reason') reason: string,
+    @Request() req: any,
+  ) {
+    return this.adminService.requestKycProfileUpdate(
+      identityId,
+      req.user.id,
+      reason,
+    );
+  }
+
+  /**
+   * Reject KYC profile
+   * Transition: PENDING_REVIEW → REJECTED
+   */
+  @Post('kyc/review/:identityId/reject')
+  async rejectKycProfile(
+    @Param('identityId') identityId: string,
+    @Body('reason') reason: string,
+    @Request() req: any,
+  ) {
+    return this.adminService.rejectKycProfile(
+      identityId,
+      req.user.id,
+      reason,
+    );
+  }
+
+  /**
+   * Approve KYC profile
+   * Transition: PENDING_REVIEW → APPROVED
+   * Triggers auto role assignment for business accounts
+   */
+  @Post('kyc/review/:identityId/approve')
+  async approveKycProfile(
+    @Param('identityId') identityId: string,
+    @Body('notes') notes: string,
+    @Request() req: any,
+  ) {
+    return this.adminService.approveKycProfile(
+      identityId,
+      req.user.id,
+      notes,
+    );
+  }
+
   @Get('support')
   async listSupportRequests(
     @Query('limit') limit?: string,
