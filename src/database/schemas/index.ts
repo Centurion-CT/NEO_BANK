@@ -54,3 +54,12 @@ export * from './addons.schema';
 
 // Biometric authentication
 export * from './biometric-challenges.schema';
+
+// MFA backup codes
+export * from './mfa-backup-codes.schema';
+
+// Push notifications
+export * from './push-subscriptions.schema';
+
+// Pending registrations
+export * from './pending-business-registrations.schema';

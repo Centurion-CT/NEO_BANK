@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { IdentityRepository } from './identity.repository';
 import {
@@ -27,6 +27,7 @@ import { FeatureFlagsConfig } from '@config/feature-flags.config';
  */
 @Injectable()
 export class IdentityService {
+  private readonly logger = new Logger(IdentityService.name);
   private readonly featureFlags: FeatureFlagsConfig;
 
   constructor(
@@ -153,6 +154,13 @@ export class IdentityService {
    */
   async getFullIdentity(identityId: string) {
     return this.identityRepository.getFullIdentity(identityId);
+  }
+
+  /**
+   * Get person profile by identity ID
+   */
+  async getPersonProfile(identityId: string) {
+    return this.identityRepository.findPersonProfileByIdentityId(identityId);
   }
 
   /**
@@ -606,6 +614,13 @@ export class IdentityService {
   }
 
   /**
+   * Reset failed attempts and unlock a secret
+   */
+  async resetSecretAttempts(secretId: string): Promise<void> {
+    await this.identityRepository.resetSecretFailedAttempts(secretId);
+  }
+
+  /**
    * Delete auth secret (e.g., when disabling MFA)
    */
   async deleteAuthSecret(
@@ -716,7 +731,7 @@ export class IdentityService {
   async createBusinessIdentityWithProfile(data: {
     profile: {
       legalName: string;
-      businessType: 'limited_liability' | 'enterprise' | 'sole_proprietorship' | 'partnership' | 'private_limited' | 'public_limited' | 'nonprofit' | 'cooperative' | 'government' | 'other';
+      businessType: 'limited_liability' | 'enterprise' | 'sole_proprietorship' | 'partnership' | 'private_limited' | 'public_limited' | 'nonprofit' | 'ngo' | 'cooperative' | 'government' | 'other';
       registrationNumber?: string;
     };
     principals: Array<{
@@ -793,6 +808,14 @@ export class IdentityService {
   }
 
   /**
+   * Check if registration number already exists
+   */
+  async checkRegistrationNumberExists(registrationNumber: string): Promise<boolean> {
+    const profile = await this.identityRepository.findBusinessProfileByRegistrationNumber(registrationNumber);
+    return !!profile;
+  }
+
+  /**
    * Update business profile
    */
   async updateBusinessProfile(
@@ -800,7 +823,7 @@ export class IdentityService {
     data: Partial<{
       legalName: string;
       tradingName: string;
-      businessType: 'sole_proprietorship' | 'partnership' | 'private_limited' | 'public_limited' | 'limited_liability' | 'enterprise' | 'nonprofit' | 'cooperative' | 'government' | 'other';
+      businessType: 'sole_proprietorship' | 'partnership' | 'private_limited' | 'public_limited' | 'limited_liability' | 'enterprise' | 'nonprofit' | 'ngo' | 'cooperative' | 'government' | 'other';
       registrationNumber: string;
       taxIdentificationNumber: string;
       registeredAddress: string;
@@ -836,11 +859,13 @@ export class IdentityService {
     businessIdentityId: string,
     data: {
       name: string;
-      role: 'owner' | 'director' | 'signatory' | 'admin' | 'operator';
+      role: 'owner' | 'director' | 'signatory' | 'admin' | 'operator' | 'staff';
       ownershipPercentage?: number;
       positionTitle?: string;
     },
   ): Promise<BusinessRelationship> {
+    this.logger.log(`Adding business relationship: businessId=${businessIdentityId}, name=${data.name}, role=${data.role}`);
+
     // Verify the business identity exists and is a legal entity
     const identity = await this.identityRepository.findIdentityById(businessIdentityId);
     if (!identity) {
@@ -863,13 +888,15 @@ export class IdentityService {
       status: 'shell',
       riskLevel: 'low',
     });
+    this.logger.log(`Created person identity: ${personIdentity.id} for business relationship`);
 
     // Create a minimal person profile for the director
-    await this.identityRepository.createPersonProfile({
+    const personProfile = await this.identityRepository.createPersonProfile({
       identityId: personIdentity.id,
       firstName: data.name.split(' ')[0] || data.name,
       lastName: data.name.split(' ').slice(1).join(' ') || '',
     });
+    this.logger.log(`Created person profile: ${personProfile.id} for person identity ${personIdentity.id}`);
 
     // Create the business relationship
     const relationship = await this.identityRepository.createBusinessRelationship({
@@ -880,6 +907,7 @@ export class IdentityService {
       positionTitle: data.positionTitle,
       startDate: new Date(),
     });
+    this.logger.log(`Created business relationship: ${relationship.id} linking business ${businessIdentityId} to person ${personIdentity.id}`);
 
     // Log event if enabled
     if (this.featureFlags.enableIdentityEventLogging) {
@@ -928,7 +956,7 @@ export class IdentityService {
   async updateBusinessRelationship(
     relationshipId: string,
     data: {
-      role?: 'owner' | 'director' | 'signatory' | 'admin' | 'operator';
+      role?: 'owner' | 'director' | 'signatory' | 'admin' | 'operator' | 'staff';
       ownershipPercentage?: number;
       positionTitle?: string;
     },
@@ -941,5 +969,91 @@ export class IdentityService {
    */
   async removeBusinessRelationship(relationshipId: string): Promise<boolean> {
     return this.identityRepository.deleteBusinessRelationship(relationshipId);
+  }
+
+  // ==================== MFA BACKUP CODES ====================
+
+  /**
+   * Generate MFA backup codes for an identity
+   * Returns the plain text codes (only shown once)
+   */
+  async generateBackupCodes(identityId: string): Promise<string[]> {
+    // Delete existing backup codes
+    await this.identityRepository.deleteBackupCodes(identityId);
+
+    // Generate 10 new backup codes
+    const codes: string[] = [];
+    const hashedCodes: { identityId: string; codeHash: string }[] = [];
+    const crypto = await import('crypto');
+    const argon2 = await import('argon2');
+
+    for (let i = 0; i < 10; i++) {
+      // Generate a random 8-character alphanumeric code
+      const code = crypto.randomBytes(4).toString('hex').toUpperCase();
+      codes.push(code);
+
+      // Hash the code for storage
+      const codeHash = await argon2.hash(code, {
+        type: argon2.argon2id,
+        memoryCost: 65536,
+        timeCost: 3,
+        parallelism: 4,
+      });
+
+      hashedCodes.push({
+        identityId,
+        codeHash,
+      });
+    }
+
+    // Store hashed codes
+    await this.identityRepository.createBackupCodes(hashedCodes);
+
+    return codes;
+  }
+
+  /**
+   * Verify a backup code
+   * Returns true if valid and marks the code as used
+   */
+  async verifyBackupCode(identityId: string, code: string): Promise<boolean> {
+    const argon2 = await import('argon2');
+    const unusedCodes = await this.identityRepository.findUnusedBackupCodes(identityId);
+
+    for (const storedCode of unusedCodes) {
+      try {
+        if (await argon2.verify(storedCode.codeHash, code.toUpperCase())) {
+          // Mark the code as used
+          await this.identityRepository.markBackupCodeUsed(storedCode.id);
+          return true;
+        }
+      } catch {
+        // Continue to next code
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Get count of remaining backup codes
+   */
+  async getRemainingBackupCodeCount(identityId: string): Promise<number> {
+    return this.identityRepository.countUnusedBackupCodes(identityId);
+  }
+
+  /**
+   * Check if identity has backup codes
+   */
+  async hasBackupCodes(identityId: string): Promise<boolean> {
+    const count = await this.identityRepository.countUnusedBackupCodes(identityId);
+    return count > 0;
+  }
+
+  /**
+   * Delete all backup codes for an identity
+   */
+  async deleteBackupCodes(identityId: string): Promise<void> {
+    await this.identityRepository.deleteBackupCodes(identityId);
   }
 }

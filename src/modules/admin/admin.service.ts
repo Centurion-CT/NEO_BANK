@@ -121,6 +121,23 @@ export class AdminService {
     // Check for MFA (TOTP secret)
     const totpSecret = await this.identityService.getAuthSecret(identityId, 'totp');
 
+    // Check for lock status
+    const pinSecret = await this.identityService.getAuthSecret(identityId, 'pin');
+    const passwordSecret = await this.identityService.getAuthSecret(identityId, 'password');
+
+    const isSecretLocked = (secret: any) => {
+      if (!secret) return false;
+      if (!secret.lockedUntil) return false;
+      return new Date(secret.lockedUntil) > new Date();
+    };
+
+    const isLocked = isSecretLocked(pinSecret) || isSecretLocked(passwordSecret);
+    const lockedUntil = isSecretLocked(pinSecret)
+      ? pinSecret?.lockedUntil
+      : isSecretLocked(passwordSecret)
+        ? passwordSecret?.lockedUntil
+        : null;
+
     return {
       id: identity.id,
       email: emailPrincipal?.principalValue || '',
@@ -140,6 +157,9 @@ export class AdminService {
       profilePictureUrl: personProfile?.profilePictureUrl || null,
       createdAt: identity.createdAt.toISOString(),
       updatedAt: identity.updatedAt.toISOString(),
+      // Lock status
+      isLocked,
+      lockedUntil: lockedUntil ? lockedUntil.toISOString() : null,
       // Stats
       activeSessionCount,
       accountCount: 0, // TODO: Add when accounts module is integrated
@@ -533,6 +553,75 @@ export class AdminService {
       businessId: identityId,
       principals,
       totalCount: principals.length,
+    };
+  }
+
+  /**
+   * Get user lock status (for login credentials)
+   */
+  async getUserLockStatus(identityId: string) {
+    const identity = await this.identityService.findById(identityId);
+    if (!identity) {
+      throw new NotFoundException({
+        code: 'IDENTITY_NOT_FOUND',
+        message: 'Identity not found',
+      });
+    }
+
+    // Check both PIN and password secrets for lock status
+    const pinSecret = await this.identityService.getAuthSecret(identityId, 'pin');
+    const passwordSecret = await this.identityService.getAuthSecret(identityId, 'password');
+
+    const isLocked = (secret: any) => {
+      if (!secret) return false;
+      if (!secret.lockedUntil) return false;
+      return new Date(secret.lockedUntil) > new Date();
+    };
+
+    const pinLocked = isLocked(pinSecret);
+    const passwordLocked = isLocked(passwordSecret);
+
+    return {
+      identityId,
+      isLocked: pinLocked || passwordLocked,
+      pinLocked,
+      pinLockedUntil: pinSecret?.lockedUntil || null,
+      pinFailedAttempts: pinSecret?.failedAttempts || 0,
+      passwordLocked,
+      passwordLockedUntil: passwordSecret?.lockedUntil || null,
+      passwordFailedAttempts: passwordSecret?.failedAttempts || 0,
+    };
+  }
+
+  /**
+   * Unlock user login credentials
+   */
+  async unlockUser(identityId: string, adminId: string) {
+    const identity = await this.identityService.findById(identityId);
+    if (!identity) {
+      throw new NotFoundException({
+        code: 'IDENTITY_NOT_FOUND',
+        message: 'Identity not found',
+      });
+    }
+
+    this.logger.log(`Admin ${adminId} unlocking user ${identityId}`);
+
+    // Reset both PIN and password locks
+    const pinSecret = await this.identityService.getAuthSecret(identityId, 'pin');
+    const passwordSecret = await this.identityService.getAuthSecret(identityId, 'password');
+
+    if (pinSecret) {
+      await this.identityService.resetSecretAttempts(pinSecret.id);
+    }
+
+    if (passwordSecret) {
+      await this.identityService.resetSecretAttempts(passwordSecret.id);
+    }
+
+    return {
+      identityId,
+      message: 'User account unlocked successfully',
     };
   }
 

@@ -62,9 +62,26 @@ export class ProfileController {
       });
     }
 
-    const { identity, personProfile, businessProfile, principals, kycProfile } = fullIdentity;
+    const { identity, personProfile, businessProfile, businessRelationships, principals, kycProfile } = fullIdentity;
     const emailPrincipal = principals.find(p => p.principalType === 'email');
     const phonePrincipal = principals.find(p => p.principalType === 'phone');
+
+    // For business accounts without a person profile, try to get name from business relationships
+    let firstName = personProfile?.firstName || '';
+    let lastName = personProfile?.lastName || '';
+
+    if (!firstName && !lastName && identity.identityType === 'legal_entity' && businessRelationships?.length > 0) {
+      // Get the first relationship (typically the registering user)
+      const primaryRelationship = businessRelationships[0];
+      if (primaryRelationship) {
+        // Fetch the person profile for the related person identity
+        const relatedPersonProfile = await this.identityService.getPersonProfile(primaryRelationship.personIdentityId);
+        if (relatedPersonProfile) {
+          firstName = relatedPersonProfile.firstName || '';
+          lastName = relatedPersonProfile.lastName || '';
+        }
+      }
+    }
 
     // Get roles from legacy userRoles table
     const legacyRoles = await this.permissionsService.getIdentityRoles(identityId);
@@ -97,8 +114,8 @@ export class ProfileController {
       id: identity.id,
       email: emailPrincipal?.principalValue || '',
       phone: phonePrincipal?.principalValue || null,
-      firstName: personProfile?.firstName || '',
-      lastName: personProfile?.lastName || '',
+      firstName,
+      lastName,
       middleName: personProfile?.middleName || null,
       dateOfBirth: personProfile?.dateOfBirth?.toISOString().split('T')[0] || null,
       status: identity.status,

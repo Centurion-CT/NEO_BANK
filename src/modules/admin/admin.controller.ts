@@ -70,6 +70,19 @@ export class AdminController {
     return this.adminService.updateUserStatus(id, dto.status);
   }
 
+  @Get('users/:id/lock-status')
+  async getUserLockStatus(@Param('id') id: string) {
+    return this.adminService.getUserLockStatus(id);
+  }
+
+  @Post('users/:id/unlock')
+  async unlockUser(
+    @Param('id') id: string,
+    @Request() req: any,
+  ) {
+    return this.adminService.unlockUser(id, req.user.id);
+  }
+
   @Get('kyc')
   async getKycQueue(
     @Query('limit') limit?: string,

@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { NotificationsRepository } from './notifications.repository';
-import { Notification } from '@database/schemas';
+import { Notification, PushSubscription } from '@database/schemas';
 
 export interface CreateNotificationDto {
   identityId: string;
@@ -23,8 +23,19 @@ export interface CreateNotificationDto {
  * - Email: SendGrid / SES
  * - SMS: Twilio / Africa's Talking
  */
+export interface CreatePushSubscriptionDto {
+  identityId: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  userAgent?: string;
+  expirationTime?: Date | null;
+}
+
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+
   constructor(
     private readonly notificationsRepository: NotificationsRepository,
   ) {}
@@ -215,5 +226,58 @@ export class NotificationsService {
         channel: 'email',
       }),
     ]);
+  }
+
+  // ============ Push Subscriptions ============
+
+  /**
+   * Subscribe to push notifications
+   */
+  async subscribeToPush(dto: CreatePushSubscriptionDto): Promise<PushSubscription> {
+    this.logger.log(`Creating push subscription for identity ${dto.identityId}`);
+
+    const subscription = await this.notificationsRepository.createPushSubscription({
+      identityId: dto.identityId,
+      endpoint: dto.endpoint,
+      p256dh: dto.p256dh,
+      auth: dto.auth,
+      userAgent: dto.userAgent,
+      expirationTime: dto.expirationTime,
+    });
+
+    this.logger.log(`Push subscription created: ${subscription.id}`);
+    return subscription;
+  }
+
+  /**
+   * Unsubscribe from push notifications
+   */
+  async unsubscribeFromPush(endpoint: string, identityId: string): Promise<void> {
+    this.logger.log(`Removing push subscription for endpoint: ${endpoint}`);
+
+    // Verify the subscription belongs to the user
+    const subscription = await this.notificationsRepository.findPushSubscriptionByEndpoint(endpoint);
+
+    if (!subscription) {
+      this.logger.warn(`Push subscription not found for endpoint: ${endpoint}`);
+      return; // Silently return if not found
+    }
+
+    if (subscription.identityId !== identityId) {
+      throw new ForbiddenException({
+        code: 'PUSH_SUBSCRIPTION_ACCESS_DENIED',
+        message: 'Access denied to this push subscription',
+      });
+    }
+
+    await this.notificationsRepository.deletePushSubscriptionByEndpoint(endpoint);
+    this.logger.log(`Push subscription removed successfully`);
+  }
+
+  /**
+   * Get push subscriptions for a user
+   */
+  async getPushSubscriptions(identityId: string): Promise<PushSubscription[]> {
+    return this.notificationsRepository.findPushSubscriptionsByIdentityId(identityId);
   }
 }

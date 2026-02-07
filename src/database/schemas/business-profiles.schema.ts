@@ -24,6 +24,7 @@ export const businessTypeEnum = pgEnum('business_type', [
   'limited_liability',   // LLC - uses RC number
   'enterprise',          // Enterprise - uses RN number
   'nonprofit',
+  'ngo',                 // Non-Governmental Organization
   'cooperative',
   'government',
   'other',
@@ -39,6 +40,7 @@ export const businessRoleEnum = pgEnum('business_role', [
   'signatory', // Authorized signatory
   'admin',     // Administrative access
   'operator',  // Day-to-day operations
+  'staff',     // General staff member
 ]);
 
 /**

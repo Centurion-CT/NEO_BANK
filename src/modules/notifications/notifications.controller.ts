@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Delete,
+  Body,
   Param,
   Query,
   UseGuards,
@@ -17,10 +18,40 @@ import {
   ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsOptional, IsNumber } from 'class-validator';
 
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators';
+
+// DTOs for push subscriptions
+class SubscribePushDto {
+  @IsString()
+  @IsNotEmpty()
+  endpoint: string;
+
+  @IsString()
+  @IsNotEmpty()
+  p256dh: string;
+
+  @IsString()
+  @IsNotEmpty()
+  auth: string;
+
+  @IsOptional()
+  @IsNumber()
+  expirationTime?: number | null;
+
+  @IsOptional()
+  @IsString()
+  userAgent?: string;
+}
+
+class UnsubscribePushDto {
+  @IsString()
+  @IsNotEmpty()
+  endpoint: string;
+}
 
 /**
  * Notifications Controller
@@ -108,6 +139,88 @@ export class NotificationsController {
       body: n.body,
       createdAt: n.createdAt,
     }));
+  }
+
+  // ============ Push Notifications ============
+  // These routes must come BEFORE :id routes to avoid conflicts
+
+  /**
+   * Get push subscription status
+   */
+  @Get('push/status')
+  @ApiOperation({
+    summary: 'Get push subscription status',
+    description: 'Check if the user has any active push subscriptions',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Push subscription status retrieved',
+  })
+  async getPushStatus(@CurrentUser('id') userId: string) {
+    const subscriptions = await this.notificationsService.getPushSubscriptions(userId);
+
+    return {
+      subscribed: subscriptions.length > 0,
+      subscriptionCount: subscriptions.length,
+    };
+  }
+
+  /**
+   * Subscribe to push notifications
+   */
+  @Post('push/subscribe')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Subscribe to push notifications',
+    description: 'Register a push subscription for the authenticated user',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Push subscription created successfully',
+  })
+  async subscribeToPush(
+    @CurrentUser('id') userId: string,
+    @Body() dto: SubscribePushDto,
+  ) {
+    const subscription = await this.notificationsService.subscribeToPush({
+      identityId: userId,
+      endpoint: dto.endpoint,
+      p256dh: dto.p256dh,
+      auth: dto.auth,
+      userAgent: dto.userAgent,
+      expirationTime: dto.expirationTime ? new Date(dto.expirationTime) : null,
+    });
+
+    return {
+      success: true,
+      message: 'Push subscription created successfully',
+      subscriptionId: subscription.id,
+    };
+  }
+
+  /**
+   * Unsubscribe from push notifications
+   */
+  @Post('push/unsubscribe')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Unsubscribe from push notifications',
+    description: 'Remove a push subscription for the authenticated user',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Push subscription removed successfully',
+  })
+  async unsubscribeFromPush(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UnsubscribePushDto,
+  ) {
+    await this.notificationsService.unsubscribeFromPush(dto.endpoint, userId);
+
+    return {
+      success: true,
+      message: 'Push subscription removed successfully',
+    };
   }
 
   /**

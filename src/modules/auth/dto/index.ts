@@ -14,3 +14,4 @@ export * from './forgot-pin.dto';
 export * from './mfa.dto';
 export * from './login-mode.dto';
 export * from './verify-credential.dto';
+export * from './business-registration.dto';

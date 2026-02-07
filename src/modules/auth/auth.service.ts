@@ -5,12 +5,22 @@ import {
   BadRequestException,
   NotFoundException,
   Logger,
+  Inject,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
 import * as OTPAuth from 'otpauth';
 import * as QRCode from 'qrcode';
+import { eq, lt } from 'drizzle-orm';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { DRIZZLE } from '@database/database.module';
+import * as schema from '@database/schemas';
+import {
+  pendingBusinessRegistrations,
+  PendingBusinessRegistration,
+  PendingBusinessRegistrationData,
+} from '@database/schemas';
 
 import { encrypt, decrypt } from '@common/utils/encryption.util';
 import { IdentityService } from '@modules/identity/identity.service';
@@ -71,6 +81,8 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
   constructor(
+    @Inject(DRIZZLE)
+    private readonly db: NodePgDatabase<typeof schema>,
     private readonly identityService: IdentityService,
     private readonly permissionsService: PermissionsService,
     private readonly tenantsService: TenantsService,
@@ -1823,7 +1835,114 @@ export class AuthService {
 
     this.logger.log(`MFA enabled for user ${userId} via ${effectiveMethod}`);
 
-    return { message: 'MFA has been enabled successfully' };
+    // Generate backup codes
+    const backupCodes = await this.identityService.generateBackupCodes(userId);
+
+    return {
+      message: 'MFA has been enabled successfully',
+      backupCodes,
+      backupCodesCount: backupCodes.length,
+    };
+  }
+
+  /**
+   * Get remaining backup codes count
+   */
+  async getBackupCodesStatus(userId: string) {
+    const mfaMethod = await this.identityService.getMfaMethod(userId);
+    if (!mfaMethod) {
+      throw new BadRequestException({
+        code: 'MFA_NOT_ENABLED',
+        message: 'MFA is not enabled',
+      });
+    }
+
+    const remainingCount = await this.identityService.getRemainingBackupCodeCount(userId);
+    const hasBackupCodes = await this.identityService.hasBackupCodes(userId);
+
+    return {
+      hasBackupCodes,
+      remainingCount,
+      totalGenerated: 10, // Always generate 10 codes
+    };
+  }
+
+  /**
+   * Regenerate backup codes (requires PIN/password verification)
+   */
+  async regenerateBackupCodes(userId: string, credential: string) {
+    // Check if MFA is enabled
+    const mfaMethod = await this.identityService.getMfaMethod(userId);
+    if (!mfaMethod) {
+      throw new BadRequestException({
+        code: 'MFA_NOT_ENABLED',
+        message: 'MFA must be enabled to generate backup codes',
+      });
+    }
+
+    // Verify login PIN or password
+    const pinSecret = await this.identityService.getAuthSecret(userId, 'pin');
+    const passwordSecret = await this.identityService.getAuthSecret(userId, 'password');
+
+    if (!pinSecret && !passwordSecret) {
+      throw new UnauthorizedException({
+        code: 'USER_NOT_FOUND',
+        message: 'User not found',
+      });
+    }
+
+    // Try to verify against PIN first, then password
+    let isValid = false;
+    if (pinSecret) {
+      isValid = await this.verifyPin(credential, pinSecret.secretHash);
+    }
+    if (!isValid && passwordSecret) {
+      isValid = await this.verifyPin(credential, passwordSecret.secretHash);
+    }
+
+    if (!isValid) {
+      throw new BadRequestException({
+        code: 'INVALID_CREDENTIAL',
+        message: 'Invalid PIN or password',
+      });
+    }
+
+    // Generate new backup codes
+    const backupCodes = await this.identityService.generateBackupCodes(userId);
+
+    // Log the event
+    await this.identityService.logEvent(userId, 'backup_codes_regenerated', {
+      description: 'MFA backup codes regenerated',
+    });
+
+    // Send security alert
+    const fullIdentity = await this.identityService.getFullIdentity(userId);
+    const emailPrincipal = fullIdentity?.principals.find(p => p.principalType === 'email');
+    if (emailPrincipal) {
+      this.mailService.sendSecurityAlertEmail(emailPrincipal.principalValue, {
+        firstName: fullIdentity?.personProfile?.firstName || 'User',
+        alertType: 'Backup Codes Regenerated',
+        description: 'New MFA backup codes have been generated. Your old codes are no longer valid.',
+        date: new Date().toISOString(),
+      }).catch(() => {
+        this.logger.warn(`Failed to send backup codes regeneration alert`);
+      });
+    }
+
+    this.logger.log(`Backup codes regenerated for user ${userId}`);
+
+    return {
+      message: 'Backup codes regenerated successfully',
+      backupCodes,
+      backupCodesCount: backupCodes.length,
+    };
+  }
+
+  /**
+   * Verify a backup code (for MFA login fallback)
+   */
+  async verifyBackupCode(userId: string, code: string): Promise<boolean> {
+    return this.identityService.verifyBackupCode(userId, code);
   }
 
   async disableMfa(userId: string, pin: string) {
@@ -1871,6 +1990,9 @@ export class AuthService {
     if (totpSecret) {
       await this.identityService.deleteAuthSecret(userId, 'totp');
     }
+
+    // Delete backup codes
+    await this.identityService.deleteBackupCodes(userId);
 
     const fullIdentity = await this.identityService.getFullIdentity(userId);
     const emailPrincipal = fullIdentity?.principals.find(p => p.principalType === 'email');
@@ -2608,5 +2730,455 @@ export class AuthService {
       this.logger.warn(`Failed to get scoped roles for ${identityId}: ${error}`);
       return [];
     }
+  }
+
+  // ============================================================================
+  // STAGED BUSINESS REGISTRATION
+  // ============================================================================
+
+  /**
+   * Check if a registration number (RC/RN) is already in use
+   */
+  async checkRegistrationNumber(registrationNumber: string) {
+    const exists = await this.identityService.checkRegistrationNumberExists(registrationNumber);
+    return { exists, registrationNumber };
+  }
+
+  /**
+   * Initialize a staged business registration
+   * Verifies OTP and creates a pending registration record
+   */
+  async initBusinessRegistration(identifier: string, otp: string) {
+    const isEmail = identifier.includes('@');
+    const normalizedIdentifier = isEmail ? identifier.toLowerCase() : identifier;
+    const contactType = isEmail ? 'email' : 'phone';
+
+    // Verify OTP
+    try {
+      await this.otpService.verifyOtp({
+        target: normalizedIdentifier,
+        purpose: 'email_verification',
+        code: otp,
+      });
+    } catch {
+      throw new BadRequestException({
+        code: 'INVALID_OTP',
+        message: 'Invalid or expired verification code',
+      });
+    }
+
+    // Check if identifier is already registered
+    const existingPrincipal = await this.identityService.findPrincipalByValue(
+      contactType,
+      normalizedIdentifier,
+    );
+    if (existingPrincipal) {
+      throw new ConflictException({
+        code: contactType === 'email' ? 'EMAIL_EXISTS' : 'PHONE_EXISTS',
+        message: `An account with this ${contactType} already exists`,
+      });
+    }
+
+    // Check for existing pending registration and delete it
+    const existingPending = await this.db
+      .select()
+      .from(pendingBusinessRegistrations)
+      .where(eq(pendingBusinessRegistrations.contactIdentifier, normalizedIdentifier))
+      .limit(1);
+
+    if (existingPending.length > 0) {
+      await this.db
+        .delete(pendingBusinessRegistrations)
+        .where(eq(pendingBusinessRegistrations.id, existingPending[0].id));
+    }
+
+    // Create pending registration (expires in 24 hours)
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 24);
+
+    const [pendingRegistration] = await this.db
+      .insert(pendingBusinessRegistrations)
+      .values({
+        contactIdentifier: normalizedIdentifier,
+        contactType: contactType as 'email' | 'phone',
+        data: {},
+        currentStep: 'business_info',
+        expiresAt,
+      })
+      .returning();
+
+    this.logger.log(`Business registration initiated for ${this.maskTarget(normalizedIdentifier)}`);
+
+    return {
+      pendingId: pendingRegistration.id,
+      step: 'business_info',
+    };
+  }
+
+  /**
+   * Submit business info step
+   */
+  async submitBusinessInfoStep(
+    pendingId: string,
+    data: {
+      legalName: string;
+      businessType: string;
+      businessEmail?: string;
+      businessPhone?: string;
+      rcNumber?: string;
+      registrationNumber?: string;
+    },
+  ) {
+    const pendingReg = await this.getPendingRegistrationById(pendingId);
+
+    // Update data and advance step
+    const currentData = (pendingReg.data || {}) as PendingBusinessRegistrationData;
+    const newData: PendingBusinessRegistrationData = {
+      ...currentData,
+      legalName: data.legalName,
+      businessType: data.businessType,
+      businessEmail: data.businessEmail,
+      businessPhone: data.businessPhone,
+      rcNumber: data.rcNumber,
+      registrationNumber: data.registrationNumber,
+    };
+
+    await this.db
+      .update(pendingBusinessRegistrations)
+      .set({
+        data: newData,
+        currentStep: 'relationship',
+        updatedAt: new Date(),
+      })
+      .where(eq(pendingBusinessRegistrations.id, pendingId));
+
+    this.logger.log(`Business info submitted for pending registration ${pendingId}`);
+
+    return { step: 'relationship' };
+  }
+
+  /**
+   * Submit relationship step
+   */
+  async submitRelationshipStep(
+    pendingId: string,
+    data: {
+      firstName: string;
+      lastName: string;
+      phone: string;
+      relationship: string;
+    },
+  ) {
+    const pendingReg = await this.getPendingRegistrationById(pendingId);
+
+    // Update data and advance step
+    const currentData = (pendingReg.data || {}) as PendingBusinessRegistrationData;
+    const newData: PendingBusinessRegistrationData = {
+      ...currentData,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      phone: data.phone,
+      relationship: data.relationship,
+    };
+
+    await this.db
+      .update(pendingBusinessRegistrations)
+      .set({
+        data: newData,
+        currentStep: 'password',
+        updatedAt: new Date(),
+      })
+      .where(eq(pendingBusinessRegistrations.id, pendingId));
+
+    this.logger.log(`Relationship info submitted for pending registration ${pendingId}`);
+
+    return { step: 'password' };
+  }
+
+  /**
+   * Complete business registration with password
+   */
+  async completeBusinessRegistration(
+    pendingId: string,
+    password: string,
+    confirmPassword: string,
+    context: RequestContext,
+  ) {
+    if (password !== confirmPassword) {
+      throw new BadRequestException({
+        code: 'PASSWORD_MISMATCH',
+        message: 'Passwords do not match',
+      });
+    }
+
+    const pendingReg = await this.getPendingRegistrationById(pendingId);
+    const data = pendingReg.data as PendingBusinessRegistrationData;
+
+    // Validate all required data is present
+    if (!data.legalName || !data.businessType) {
+      throw new BadRequestException({
+        code: 'INCOMPLETE_DATA',
+        message: 'Business information is incomplete. Please start from the beginning.',
+      });
+    }
+
+    if (!data.firstName || !data.lastName || !data.phone || !data.relationship) {
+      throw new BadRequestException({
+        code: 'INCOMPLETE_DATA',
+        message: 'Relationship information is incomplete. Please complete that step first.',
+      });
+    }
+
+    // Check again if identifier is already registered (race condition protection)
+    const existingPrincipal = await this.identityService.findPrincipalByValue(
+      pendingReg.contactType,
+      pendingReg.contactIdentifier,
+    );
+    if (existingPrincipal) {
+      await this.deletePendingRegistration(pendingId);
+      throw new ConflictException({
+        code: pendingReg.contactType === 'email' ? 'EMAIL_EXISTS' : 'PHONE_EXISTS',
+        message: `An account with this ${pendingReg.contactType} already exists`,
+      });
+    }
+
+    // Also check if phone from relationship step already exists
+    if (data.phone !== pendingReg.contactIdentifier) {
+      const existingPhone = await this.identityService.findPrincipalByValue('phone', data.phone);
+      if (existingPhone) {
+        throw new ConflictException({
+          code: 'PHONE_EXISTS',
+          message: 'An account with this phone number already exists',
+        });
+      }
+    }
+
+    // Hash password
+    const passwordHash = await this.hashPin(password);
+
+    // Determine email and phone from collected data
+    const email = pendingReg.contactType === 'email'
+      ? pendingReg.contactIdentifier
+      : data.businessEmail || '';
+    const phone = pendingReg.contactType === 'phone'
+      ? pendingReg.contactIdentifier
+      : data.phone;
+
+    // Map relationship to business role
+    const roleMapping: Record<string, 'owner' | 'director' | 'signatory' | 'admin' | 'operator' | 'staff'> = {
+      authorized_signatory: 'signatory',
+      owner: 'owner',
+      director: 'director',
+      staff: 'staff',
+    };
+    const businessRole = roleMapping[data.relationship] || 'staff';
+
+    // Create business identity with profile
+    const businessResult = await this.identityService.createBusinessIdentityWithProfile({
+      profile: {
+        legalName: data.legalName,
+        businessType: data.businessType as any,
+      },
+      principals: [
+        ...(email ? [{ type: 'email' as const, value: email, isPrimary: true }] : []),
+        ...(phone && phone !== email ? [{ type: 'phone' as const, value: phone, isPrimary: true }] : []),
+      ],
+    });
+
+    const businessIdentity = businessResult.identity;
+    const principals = businessResult.principals;
+
+    // Update business profile with email, phone, and registration number
+    const registrationNumber = data.rcNumber || data.registrationNumber;
+    if (email || phone || registrationNumber) {
+      await this.identityService.updateBusinessProfile(businessIdentity.id, {
+        businessEmail: email || undefined,
+        businessPhone: phone || undefined,
+        registrationNumber: registrationNumber || undefined,
+      });
+    }
+
+    // Mark contact as verified (since OTP was verified)
+    const contactPrincipal = principals.find(
+      (p) => p.principalValue === pendingReg.contactIdentifier,
+    );
+    if (contactPrincipal) {
+      await this.identityService.verifyPrincipal(contactPrincipal.id);
+    }
+
+    // Update identity status to active
+    await this.identityService.updateStatus(businessIdentity.id, 'active', undefined, 'Business registration completed');
+
+    // Store password in auth_secrets
+    await this.identityService.setAuthSecret(businessIdentity.id, 'password', passwordHash);
+
+    // Create a person profile for the business identity to store contact person's details
+    // This allows firstName/lastName to be retrieved when fetching the business profile
+    await this.identityService.createPersonProfileForBusiness(businessIdentity.id, {
+      firstName: data.firstName,
+      lastName: data.lastName,
+    });
+
+    // Create business relationship (this also creates a person identity for the registering user)
+    try {
+      const relationship = await this.identityService.addBusinessRelationship(businessIdentity.id, {
+        name: `${data.firstName} ${data.lastName}`,
+        role: businessRole,
+      });
+      this.logger.log(`Business relationship created: ${relationship.id} for business ${businessIdentity.id}`);
+    } catch (relationshipError) {
+      this.logger.error(`Failed to create business relationship: ${relationshipError}`);
+      throw relationshipError;
+    }
+
+    // Assign roles and properties
+    await this.assignRolesAndPropertiesToNewUser(
+      businessIdentity.id,
+      true,
+      data.legalName,
+      context.channel,
+    );
+
+    // Generate tokens
+    const tokens = await this.generateTokens(businessIdentity.id, email);
+
+    // Create session
+    const session = await this.sessionsService.createSession({
+      identityId: businessIdentity.id,
+      refreshToken: tokens.refreshToken,
+      deviceId: context.deviceId,
+      deviceName: context.deviceName,
+      userAgent: context.userAgent,
+      ipAddress: context.ipAddress || 'unknown',
+    });
+
+    // Log identity event
+    await this.identityService.logEvent(businessIdentity.id, 'created', {
+      description: 'Business registered via staged flow',
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+
+    // Delete pending registration
+    await this.deletePendingRegistration(pendingId);
+
+    // Send welcome email
+    if (email) {
+      this.mailService.sendWelcomeEmail(email, {
+        firstName: data.firstName,
+        lastName: data.lastName,
+      }).catch(() => {
+        this.logger.warn(`Failed to send welcome email to ${email}`);
+      });
+    }
+
+    this.logger.log(`Business registered: ${data.legalName} (${email}) from ${context.ipAddress}`);
+
+    const emailPrincipal = principals.find(p => p.principalType === 'email');
+    const phonePrincipal = principals.find(p => p.principalType === 'phone');
+
+    return {
+      user: {
+        id: businessIdentity.id,
+        email: email,
+        phone: phone,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        accountType: 'business',
+        legalName: data.legalName,
+        businessType: data.businessType,
+        status: businessIdentity.status,
+        tier: 'basic',
+        emailVerified: emailPrincipal?.isVerified || pendingReg.contactType === 'email',
+        phoneVerified: phonePrincipal?.isVerified || pendingReg.contactType === 'phone',
+        role: 'user',
+        requiresOnboarding: false, // No longer requires onboarding since relationship is already set
+        onboardingStep: undefined,
+      },
+      ...tokens,
+      sessionId: session.id,
+    };
+  }
+
+  /**
+   * Get pending registration by ID
+   */
+  async getPendingRegistration(pendingId: string) {
+    const pendingReg = await this.getPendingRegistrationById(pendingId);
+    const data = pendingReg.data as PendingBusinessRegistrationData;
+
+    return {
+      id: pendingReg.id,
+      contactIdentifier: pendingReg.contactIdentifier,
+      contactType: pendingReg.contactType,
+      currentStep: pendingReg.currentStep,
+      data: {
+        legalName: data.legalName,
+        businessType: data.businessType,
+        businessEmail: data.businessEmail,
+        businessPhone: data.businessPhone,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        phone: data.phone,
+        relationship: data.relationship,
+      },
+      expiresAt: pendingReg.expiresAt.toISOString(),
+    };
+  }
+
+  /**
+   * Helper: Get pending registration by ID with validation
+   */
+  private async getPendingRegistrationById(pendingId: string): Promise<PendingBusinessRegistration> {
+    const [pendingReg] = await this.db
+      .select()
+      .from(pendingBusinessRegistrations)
+      .where(eq(pendingBusinessRegistrations.id, pendingId))
+      .limit(1);
+
+    if (!pendingReg) {
+      throw new NotFoundException({
+        code: 'PENDING_REGISTRATION_NOT_FOUND',
+        message: 'Registration not found or has expired. Please start again.',
+      });
+    }
+
+    // Check if expired
+    if (new Date() > pendingReg.expiresAt) {
+      // Clean up expired record
+      await this.deletePendingRegistration(pendingId);
+      throw new BadRequestException({
+        code: 'REGISTRATION_EXPIRED',
+        message: 'Registration has expired. Please start again.',
+      });
+    }
+
+    return pendingReg;
+  }
+
+  /**
+   * Helper: Delete pending registration
+   */
+  private async deletePendingRegistration(pendingId: string): Promise<void> {
+    await this.db
+      .delete(pendingBusinessRegistrations)
+      .where(eq(pendingBusinessRegistrations.id, pendingId));
+  }
+
+  /**
+   * Cleanup expired pending registrations
+   * Can be called by a cron job
+   */
+  async cleanupExpiredPendingRegistrations(): Promise<number> {
+    const result = await this.db
+      .delete(pendingBusinessRegistrations)
+      .where(lt(pendingBusinessRegistrations.expiresAt, new Date()))
+      .returning();
+
+    if (result.length > 0) {
+      this.logger.log(`Cleaned up ${result.length} expired pending registrations`);
+    }
+
+    return result.length;
   }
 }

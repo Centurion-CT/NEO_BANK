@@ -51,6 +51,11 @@ import {
   SetPinDto,
   CheckAccountDto,
   VerifyCredentialDto,
+  InitBusinessRegistrationDto,
+  BusinessInfoStepDto,
+  RelationshipStepDto,
+  PasswordStepDto,
+  CheckRegistrationNumberDto,
 } from './dto';
 import { SessionInfo } from '@modules/sessions/sessions.service';
 
@@ -200,6 +205,129 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Onboarding status' })
   async getBusinessOnboardingStatus(@CurrentUser('id') userId: string) {
     return this.authService.getBusinessOnboardingStatus(userId);
+  }
+
+  // ============================================================================
+  // STAGED BUSINESS REGISTRATION
+  // ============================================================================
+
+  /**
+   * Check if registration number (RC/RN) is already in use
+   */
+  @Public()
+  @Post('business/check-registration-number')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Check registration number availability',
+    description: 'Check if a business registration number (RC/RN) is already registered',
+  })
+  @ApiResponse({ status: 200, description: 'Registration number check result' })
+  async checkRegistrationNumber(@Body() dto: CheckRegistrationNumberDto) {
+    return this.authService.checkRegistrationNumber(dto.registrationNumber);
+  }
+
+  /**
+   * Initialize business registration after OTP verification
+   */
+  @Public()
+  @Post('business/init')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Initialize business registration',
+    description: 'Start business registration flow after OTP verification. Creates a pending registration.',
+  })
+  @ApiResponse({ status: 200, description: 'Pending registration created' })
+  @ApiResponse({ status: 400, description: 'Invalid OTP' })
+  @ApiResponse({ status: 409, description: 'Email/phone already exists' })
+  async initBusinessRegistration(@Body() dto: InitBusinessRegistrationDto) {
+    return this.authService.initBusinessRegistration(dto.identifier, dto.otp);
+  }
+
+  /**
+   * Submit business info step
+   */
+  @Public()
+  @Post('business/step/business-info')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Submit business info',
+    description: 'Submit business information (Step 1 of staged registration)',
+  })
+  @ApiResponse({ status: 200, description: 'Business info saved, proceed to relationship step' })
+  @ApiResponse({ status: 404, description: 'Pending registration not found or expired' })
+  async submitBusinessInfoStep(@Body() dto: BusinessInfoStepDto) {
+    return this.authService.submitBusinessInfoStep(dto.pendingId, {
+      legalName: dto.legalName,
+      businessType: dto.businessType,
+      businessEmail: dto.businessEmail,
+      businessPhone: dto.businessPhone,
+      rcNumber: dto.rcNumber,
+      registrationNumber: dto.registrationNumber,
+    });
+  }
+
+  /**
+   * Submit relationship step
+   */
+  @Public()
+  @Post('business/step/relationship')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Submit relationship info',
+    description: 'Submit user-business relationship (Step 2 of staged registration)',
+  })
+  @ApiResponse({ status: 200, description: 'Relationship info saved, proceed to password step' })
+  @ApiResponse({ status: 404, description: 'Pending registration not found or expired' })
+  async submitRelationshipStep(@Body() dto: RelationshipStepDto) {
+    return this.authService.submitRelationshipStep(dto.pendingId, {
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      phone: dto.phone,
+      relationship: dto.relationship,
+    });
+  }
+
+  /**
+   * Complete business registration with password
+   */
+  @Public()
+  @Post('business/step/password')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Complete business registration',
+    description: 'Create password and complete business registration (Step 3 of staged registration)',
+  })
+  @ApiResponse({ status: 201, description: 'Business registered successfully' })
+  @ApiResponse({ status: 400, description: 'Password validation failed or incomplete data' })
+  @ApiResponse({ status: 404, description: 'Pending registration not found or expired' })
+  @ApiResponse({ status: 409, description: 'Email/phone already exists' })
+  async completeBusinessRegistration(@Body() dto: PasswordStepDto, @Req() req: Request) {
+    return this.authService.completeBusinessRegistration(dto.pendingId, dto.password, dto.confirmPassword, {
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      deviceId: req.headers['x-device-id'] as string,
+      deviceName: req.headers['x-device-name'] as string,
+    });
+  }
+
+  /**
+   * Get pending registration status
+   */
+  @Public()
+  @Get('business/pending/:id')
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Get pending registration',
+    description: 'Get current step and collected data for a pending registration (for resume)',
+  })
+  @ApiParam({ name: 'id', description: 'Pending registration ID' })
+  @ApiResponse({ status: 200, description: 'Pending registration data' })
+  @ApiResponse({ status: 404, description: 'Pending registration not found or expired' })
+  async getPendingRegistration(@Param('id') pendingId: string) {
+    return this.authService.getPendingRegistration(pendingId);
   }
 
   /**
@@ -664,6 +792,41 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Invalid MFA token' })
   async requestMfaEmailFallback(@Body() dto: RequestMfaEmailFallbackDto) {
     return this.authService.requestMfaEmailFallback(dto.mfaToken);
+  }
+
+  /**
+   * Get backup codes status
+   */
+  @Get('mfa/backup-codes/status')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Get backup codes status',
+    description: 'Returns the number of remaining backup codes',
+  })
+  @ApiResponse({ status: 200, description: 'Backup codes status retrieved' })
+  async getBackupCodesStatus(@CurrentUser('id') userId: string) {
+    return this.authService.getBackupCodesStatus(userId);
+  }
+
+  /**
+   * Regenerate backup codes
+   */
+  @Post('mfa/backup-codes/regenerate')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Regenerate backup codes',
+    description: 'Generate new backup codes (requires PIN/password verification). Old codes become invalid.',
+  })
+  @ApiResponse({ status: 200, description: 'Backup codes regenerated successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid PIN/password or MFA not enabled' })
+  async regenerateBackupCodes(
+    @CurrentUser('id') userId: string,
+    @Body() dto: { credential: string },
+  ) {
+    return this.authService.regenerateBackupCodes(userId, dto.credential);
   }
 
   // ============================================================================

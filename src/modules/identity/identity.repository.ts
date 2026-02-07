@@ -31,6 +31,9 @@ import {
   IdentityEvent,
   NewIdentityEvent,
   identityEvents,
+  MfaBackupCode,
+  NewMfaBackupCode,
+  mfaBackupCodes,
 } from '@database/schemas';
 
 /**
@@ -168,6 +171,18 @@ export class IdentityRepository {
       .select()
       .from(businessProfiles)
       .where(eq(businessProfiles.identityId, identityId))
+      .limit(1);
+    return profile || null;
+  }
+
+  /**
+   * Find business profile by registration number (RC/RN)
+   */
+  async findBusinessProfileByRegistrationNumber(registrationNumber: string): Promise<BusinessProfile | null> {
+    const [profile] = await this.db
+      .select()
+      .from(businessProfiles)
+      .where(eq(businessProfiles.registrationNumber, registrationNumber))
       .limit(1);
     return profile || null;
   }
@@ -562,5 +577,82 @@ export class IdentityRepository {
       principals,
       kycProfile
     };
+  }
+
+  // ==================== MFA BACKUP CODES ====================
+
+  /**
+   * Create multiple MFA backup codes
+   */
+  async createBackupCodes(codes: NewMfaBackupCode[]): Promise<MfaBackupCode[]> {
+    if (codes.length === 0) return [];
+    return this.db.insert(mfaBackupCodes).values(codes).returning();
+  }
+
+  /**
+   * Find unused backup codes for an identity
+   */
+  async findUnusedBackupCodes(identityId: string): Promise<MfaBackupCode[]> {
+    return this.db
+      .select()
+      .from(mfaBackupCodes)
+      .where(
+        and(
+          eq(mfaBackupCodes.identityId, identityId),
+          eq(mfaBackupCodes.isUsed, false),
+        ),
+      );
+  }
+
+  /**
+   * Find all backup codes for an identity (used and unused)
+   */
+  async findAllBackupCodes(identityId: string): Promise<MfaBackupCode[]> {
+    return this.db
+      .select()
+      .from(mfaBackupCodes)
+      .where(eq(mfaBackupCodes.identityId, identityId))
+      .orderBy(mfaBackupCodes.createdAt);
+  }
+
+  /**
+   * Mark a backup code as used
+   */
+  async markBackupCodeUsed(codeId: string): Promise<MfaBackupCode> {
+    const [code] = await this.db
+      .update(mfaBackupCodes)
+      .set({
+        isUsed: true,
+        usedAt: new Date(),
+      })
+      .where(eq(mfaBackupCodes.id, codeId))
+      .returning();
+    return code;
+  }
+
+  /**
+   * Delete all backup codes for an identity
+   */
+  async deleteBackupCodes(identityId: string): Promise<number> {
+    const result = await this.db
+      .delete(mfaBackupCodes)
+      .where(eq(mfaBackupCodes.identityId, identityId));
+    return result.rowCount ?? 0;
+  }
+
+  /**
+   * Count unused backup codes for an identity
+   */
+  async countUnusedBackupCodes(identityId: string): Promise<number> {
+    const [result] = await this.db
+      .select({ count: count() })
+      .from(mfaBackupCodes)
+      .where(
+        and(
+          eq(mfaBackupCodes.identityId, identityId),
+          eq(mfaBackupCodes.isUsed, false),
+        ),
+      );
+    return result?.count ?? 0;
   }
 }
