@@ -520,6 +520,18 @@ export class AuthService {
 
     this.logger.log(`User logged in: ${email} from ${context.ipAddress}`);
 
+    // Send login notification email (fire-and-forget)
+    this.mailService
+      .sendSecurityAlertEmail(email, {
+        firstName: personProfile?.firstName || 'User',
+        alertType: 'New Login Detected',
+        description: 'A successful login was made to your account.',
+        ipAddress: context.ipAddress,
+        device: context.userAgent,
+        date: new Date().toUTCString(),
+      })
+      .catch((err) => this.logger.error(`Failed to send login notification email to ${email}`, err.stack));
+
     // Check for transaction PIN
     const transactionPinSecret = await this.identityService.getAuthSecret(identity.id, 'transaction_pin');
 
@@ -2181,6 +2193,18 @@ export class AuthService {
     });
 
     this.logger.log(`MFA login completed for user ${email}`);
+
+    // Send login notification email (fire-and-forget)
+    this.mailService
+      .sendSecurityAlertEmail(email, {
+        firstName: fullIdentity?.personProfile?.firstName || 'User',
+        alertType: 'New Login Detected',
+        description: 'A successful login was made to your account using multi-factor authentication.',
+        ipAddress: context.ipAddress,
+        device: context.userAgent,
+        date: new Date().toUTCString(),
+      })
+      .catch((err) => this.logger.error(`Failed to send login notification email to ${email}`, err.stack));
 
     // Determine account type based on identity type
     const isBusinessAccount = identity.identityType === 'legal_entity';
