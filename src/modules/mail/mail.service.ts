@@ -25,7 +25,7 @@ export class MailService {
   /**
    * Send welcome email to new user
    */
-  async sendWelcomeEmail(to: string, data: { firstName: string; lastName: string }): Promise<void> {
+  async sendWelcomeEmail(to: string, data: { firstName: string; lastName: string }): Promise<boolean> {
     try {
       await this.mailerService.sendMail({
         to,
@@ -39,9 +39,10 @@ export class MailService {
         },
       });
       this.logger.log(`Welcome email sent to ${to}`);
+      return true;
     } catch (error) {
       this.logger.error(`Failed to send welcome email to ${to}`, error.stack);
-      throw error;
+      return false;
     }
   }
 
@@ -51,7 +52,7 @@ export class MailService {
   async sendOtpEmail(
     to: string,
     data: { firstName: string; otp: string; purpose: string; expiresIn: number },
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.mailerService.sendMail({
         to,
@@ -67,9 +68,10 @@ export class MailService {
         },
       });
       this.logger.log(`OTP email sent to ${to} for ${data.purpose}`);
+      return true;
     } catch (error) {
       this.logger.error(`Failed to send OTP email to ${to}`, error.stack);
-      throw error;
+      return false;
     }
   }
 
@@ -79,7 +81,7 @@ export class MailService {
   async sendPinResetEmail(
     to: string,
     data: { firstName: string; resetLink: string; expiresIn: number },
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.mailerService.sendMail({
         to,
@@ -94,9 +96,10 @@ export class MailService {
         },
       });
       this.logger.log(`PIN reset email sent to ${to}`);
+      return true;
     } catch (error) {
       this.logger.error(`Failed to send PIN reset email to ${to}`, error.stack);
-      throw error;
+      return false;
     }
   }
 
@@ -115,7 +118,7 @@ export class MailService {
       date: string;
       balance: string;
     },
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const subject =
         data.type === 'credit'
@@ -141,9 +144,10 @@ export class MailService {
         },
       });
       this.logger.log(`Transaction email sent to ${to} - ${data.reference}`);
+      return true;
     } catch (error) {
       this.logger.error(`Failed to send transaction email to ${to}`, error.stack);
-      throw error;
+      return false;
     }
   }
 
@@ -161,7 +165,7 @@ export class MailService {
       location?: string;
       date: string;
     },
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.mailerService.sendMail({
         to,
@@ -181,9 +185,10 @@ export class MailService {
         },
       });
       this.logger.log(`Security alert email sent to ${to} - ${data.alertType}`);
+      return true;
     } catch (error) {
       this.logger.error(`Failed to send security alert email to ${to}`, error.stack);
-      throw error;
+      return false;
     }
   }
 
@@ -198,7 +203,7 @@ export class MailService {
       documentType: string;
       rejectionReason?: string;
     },
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const subjects = {
         verified: 'Document Verified Successfully',
@@ -220,9 +225,10 @@ export class MailService {
         },
       });
       this.logger.log(`KYC status email sent to ${to} - ${data.status}`);
+      return true;
     } catch (error) {
       this.logger.error(`Failed to send KYC status email to ${to}`, error.stack);
-      throw error;
+      return false;
     }
   }
 
@@ -234,7 +240,7 @@ export class MailService {
     subject: string,
     template: string,
     context: Record<string, unknown>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.mailerService.sendMail({
         to,
@@ -247,9 +253,10 @@ export class MailService {
         },
       });
       this.logger.log(`Email sent to ${to} - ${subject}`);
+      return true;
     } catch (error) {
       this.logger.error(`Failed to send email to ${to}`, error.stack);
-      throw error;
+      return false;
     }
   }
 }

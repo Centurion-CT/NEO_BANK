@@ -9,6 +9,19 @@ import { TransformInterceptor } from '@common/interceptors/transform.interceptor
 import { AuditLogInterceptor } from '@common/interceptors/audit-log.interceptor';
 import { AuditService } from '@modules/audit/audit.service';
 
+// Prevent unhandled errors from crashing the process
+process.on('unhandledRejection', (reason: any) => {
+  console.error('Unhandled Promise Rejection:', reason?.stack || reason);
+});
+
+process.on('uncaughtException', (error: Error) => {
+  console.error('Uncaught Exception:', error.stack);
+  // Only exit for truly fatal errors (e.g. out of memory)
+  if (error.message?.includes('out of memory') || error.message?.includes('ENOMEM')) {
+    process.exit(1);
+  }
+});
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log', 'debug', 'verbose'],
@@ -122,7 +135,7 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`
     ╔═══════════════════════════════════════════════════════════╗
-    ║                    BankApp API Server                      ║
+    ║                    BankApp API Server                     ║
     ╠═══════════════════════════════════════════════════════════╣
     ║  Environment: ${process.env.NODE_ENV || 'development'}
     ║  Port:        ${port}

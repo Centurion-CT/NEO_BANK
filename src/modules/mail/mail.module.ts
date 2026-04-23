@@ -3,21 +3,37 @@ import { MailerModule } from '@nestjs-modules/mailer';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
 import { ConfigService, ConfigModule } from '@nestjs/config';
 import { join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { MailService } from './mail.service';
 
-/**
- * Mail Module
- *
- * Handles:
- * - Email sending via SMTP
- * - Handlebars template rendering
- * - Common email operations (OTP, welcome, transactions)
- *
- * CONFIGURATION:
- * Set SMTP credentials in environment variables.
- * Templates are in src/modules/mail/templates/
- */
+function resolveTemplateDir(): string {
+  // Candidate paths in priority order
+  const candidates = [
+    // Development: src templates
+    join(process.cwd(), 'src', 'modules', 'mail', 'templates'),
+    // Production: templates relative to compiled module
+    join(__dirname, 'templates'),
+    // Production fallback: dist/modules/mail/templates (when rootDir mismatch)
+    join(process.cwd(), 'dist', 'modules', 'mail', 'templates'),
+  ];
+
+  for (const dir of candidates) {
+    if (existsSync(dir)) {
+      try {
+        const files = readdirSync(dir);
+        if (files.some((f) => f.endsWith('.hbs'))) {
+          return dir;
+        }
+      } catch {
+        // Skip inaccessible directories
+      }
+    }
+  }
+
+  // Final fallback to __dirname/templates
+  return join(__dirname, 'templates');
+}
+
 @Global()
 @Module({
   imports: [
@@ -39,10 +55,7 @@ import { MailService } from './mail.service';
           from: `"${configService.get<string>('mail.fromName')}" <${configService.get<string>('mail.fromEmail')}>`,
         },
         template: {
-          // Use src templates in development, dist templates in production
-          dir: existsSync(join(process.cwd(), 'src', 'modules', 'mail', 'templates'))
-            ? join(process.cwd(), 'src', 'modules', 'mail', 'templates')
-            : join(__dirname, 'templates'),
+          dir: resolveTemplateDir(),
           adapter: new HandlebarsAdapter(),
           options: {
             strict: true,
