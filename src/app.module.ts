@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
+import { HealthController } from '@common/controllers/health.controller';
 
 // Configuration
 import { appConfig, databaseConfig, jwtConfig, redisConfig, mailConfig, qoreidConfig, bunnyConfig } from '@config/index';
@@ -90,6 +91,7 @@ import { PropertiesModule } from '@modules/properties/properties.module';
     TenantsModule,
     PropertiesModule,
   ],
+  controllers: [HealthController],
   providers: [
     // Global Rate Limiting Guard
     {

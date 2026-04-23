@@ -39,29 +39,38 @@ function resolveTemplateDir(): string {
   imports: [
     MailerModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        transport: {
-          host: configService.get<string>('mail.host'),
-          port: configService.get<number>('mail.port'),
-          secure: configService.get<boolean>('mail.secure'),
-          auth: {
-            user: configService.get<string>('mail.user'),
-            pass: configService.get<string>('mail.password'),
+      useFactory: async (configService: ConfigService) => {
+        const user = configService.get<string>('mail.user');
+        const pass = configService.get<string>('mail.password');
+
+        if (!user || !pass) {
+          console.warn(
+            '[MailModule] MAIL_USER or MAIL_PASSWORD is not set — emails will fail. ' +
+            'Set these environment variables to enable email sending.',
+          );
+        }
+
+        return {
+          transport: {
+            host: configService.get<string>('mail.host'),
+            port: configService.get<number>('mail.port'),
+            secure: configService.get<boolean>('mail.secure'),
+            ...(user && pass ? { auth: { user, pass } } : {}),
+            ignoreTLS: configService.get<boolean>('mail.ignoreTLS'),
+            requireTLS: configService.get<boolean>('mail.requireTLS'),
           },
-          ignoreTLS: configService.get<boolean>('mail.ignoreTLS'),
-          requireTLS: configService.get<boolean>('mail.requireTLS'),
-        },
-        defaults: {
-          from: `"${configService.get<string>('mail.fromName')}" <${configService.get<string>('mail.fromEmail')}>`,
-        },
-        template: {
-          dir: resolveTemplateDir(),
-          adapter: new HandlebarsAdapter(),
-          options: {
-            strict: true,
+          defaults: {
+            from: `"${configService.get<string>('mail.fromName')}" <${configService.get<string>('mail.fromEmail')}>`,
           },
-        },
-      }),
+          template: {
+            dir: resolveTemplateDir(),
+            adapter: new HandlebarsAdapter(),
+            options: {
+              strict: true,
+            },
+          },
+        };
+      },
       inject: [ConfigService],
     }),
   ],
