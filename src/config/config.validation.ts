@@ -56,16 +56,11 @@ export const configValidationSchema = Joi.object({
     .valid('error', 'warn', 'log', 'debug', 'verbose')
     .default('debug'),
 
-  // Mail (SMTP)
-  MAIL_HOST: Joi.string().default('smtp.gmail.com'),
-  MAIL_PORT: Joi.number().default(587),
-  MAIL_USER: Joi.string().required().description('SMTP username / email'),
-  MAIL_PASSWORD: Joi.string().required().description('SMTP password or app password'),
+  // Mail (SendPipe)
+  SENDPIPE_API_KEY: Joi.string().required().description('SendPipe API key'),
+  SENDPIPE_BASE_URL: Joi.string().default('https://sendpipe.fregatelab.com/v1'),
   MAIL_FROM_NAME: Joi.string().default('BankApp'),
   MAIL_FROM_EMAIL: Joi.string().email().default('noreply@bankapp.com'),
-  MAIL_SECURE: Joi.boolean().default(false),
-  MAIL_IGNORE_TLS: Joi.boolean().default(false),
-  MAIL_REQUIRE_TLS: Joi.boolean().default(false),
 
   // Bunny CDN (optional - profile picture uploads)
   BUNNY_STORAGE_API_KEY: Joi.string().optional().default(''),
