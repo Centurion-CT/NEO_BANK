@@ -48,23 +48,16 @@ function resolveTemplateDir(): string {
         const ignoreTLS = configService.get<boolean>('mail.ignoreTLS');
         const requireTLS = configService.get<boolean>('mail.requireTLS');
 
-        console.log(`[MailModule] Config: host=${host}, port=${port}, secure=${secure}, user=${user ? user.substring(0, 3) + '***' : 'NOT SET'}, pass=${pass ? '***set***' : 'NOT SET'}, ignoreTLS=${ignoreTLS}, requireTLS=${requireTLS}`);
-
-        if (!user || !pass) {
-          console.warn(
-            '[MailModule] MAIL_USER or MAIL_PASSWORD is not set — emails will fail. ' +
-            'Set these environment variables to enable email sending.',
-          );
-        }
 
         return {
           transport: {
             host,
             port,
             secure,
-            ...(user && pass ? { auth: { user, pass } } : {}),
+            auth: { user, pass },
             ignoreTLS,
             requireTLS,
+            tls: { rejectUnauthorized: false },
           },
           defaults: {
             from: `"${configService.get<string>('mail.fromName')}" <${configService.get<string>('mail.fromEmail')}>`,
@@ -76,6 +69,7 @@ function resolveTemplateDir(): string {
               strict: true,
             },
           },
+
         };
       },
       inject: [ConfigService],
