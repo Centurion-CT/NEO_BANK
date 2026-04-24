@@ -40,8 +40,15 @@ function resolveTemplateDir(): string {
     MailerModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
+        const host = configService.get<string>('mail.host');
+        const port = configService.get<number>('mail.port');
+        const secure = configService.get<boolean>('mail.secure');
         const user = configService.get<string>('mail.user');
         const pass = configService.get<string>('mail.password');
+        const ignoreTLS = configService.get<boolean>('mail.ignoreTLS');
+        const requireTLS = configService.get<boolean>('mail.requireTLS');
+
+        console.log(`[MailModule] Config: host=${host}, port=${port}, secure=${secure}, user=${user ? user.substring(0, 3) + '***' : 'NOT SET'}, pass=${pass ? '***set***' : 'NOT SET'}, ignoreTLS=${ignoreTLS}, requireTLS=${requireTLS}`);
 
         if (!user || !pass) {
           console.warn(
@@ -52,12 +59,12 @@ function resolveTemplateDir(): string {
 
         return {
           transport: {
-            host: configService.get<string>('mail.host'),
-            port: configService.get<number>('mail.port'),
-            secure: configService.get<boolean>('mail.secure'),
+            host,
+            port,
+            secure,
             ...(user && pass ? { auth: { user, pass } } : {}),
-            ignoreTLS: configService.get<boolean>('mail.ignoreTLS'),
-            requireTLS: configService.get<boolean>('mail.requireTLS'),
+            ignoreTLS,
+            requireTLS,
           },
           defaults: {
             from: `"${configService.get<string>('mail.fromName')}" <${configService.get<string>('mail.fromEmail')}>`,
